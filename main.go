@@ -42,6 +42,8 @@ func main() {
 	mux.HandleFunc("/api/runs", app.handleRuns)        // list (also catches trailing)
 	mux.HandleFunc("/api/runs/", app.handleRunByPath)  // /api/runs/:id and /:id/gpx
 	mux.HandleFunc("/api/stats", app.handleStats)
+	mux.HandleFunc("/api/investigate/strava", app.handleInvestigateStrava)
+	mux.HandleFunc("/api/investigate/health", app.handleInvestigateHealth)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
@@ -90,7 +92,7 @@ func trimLeadingSlash(p string) string {
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

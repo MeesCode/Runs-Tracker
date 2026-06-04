@@ -17,6 +17,7 @@ export function closePanel() {
   const overlay = document.getElementById('overlay')
   panel.classList.remove('open')
   overlay.classList.remove('show')
+  document.body.classList.remove('detail-open')
   panel.setAttribute('aria-hidden', 'true')
   // Allow the 300ms slide-out before tearing charts/maps down.
   setTimeout(destroyActive, 320)
@@ -29,6 +30,7 @@ export async function openPanel(id) {
   panel.innerHTML = `<div class="panel-loading">Loading…</div>`
   panel.classList.add('open')
   overlay.classList.add('show')
+  document.body.classList.add('detail-open')
   panel.setAttribute('aria-hidden', 'false')
   panel.scrollTop = 0
 

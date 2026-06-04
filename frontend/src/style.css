@@ -325,6 +325,17 @@ table.splits tr:last-child td { border-bottom: none; }
 /* Leaflet tweaks for dark theme */
 .leaflet-container { background: #1f1f36; font-family: inherit; }
 
+/* Keep card-thumbnail Leaflet panes below the sliding detail panel (z-index 100)
+   and the overlay (z-index 90). Leaflet panes set their own stacking, so when the
+   detail panel is open we hide the card maps entirely to stop tiles bleeding
+   through. Scoped to `.run-card` so the detail panel's own map (zoom controls,
+   attribution) keeps working. */
+.run-card .leaflet-container { z-index: 1; }
+body.detail-open .run-card .leaflet-container {
+  z-index: -1;
+  visibility: hidden;
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {
   .grid { grid-template-columns: repeat(2, 1fr); }

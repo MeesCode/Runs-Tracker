@@ -1,0 +1,14 @@
+version: '3'
+services:
+  runs-tracker:
+    build: .
+    ports:
+      - "8651:8651"
+    restart: unless-stopped
+    volumes:
+      - runs-data:/data
+    environment:
+      - PORT=8651
+      - DB_PATH=/data/runs.db
+volumes:
+  runs-data:

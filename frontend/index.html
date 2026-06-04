@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Runs Tracker</title>
+    <meta name="description" content="Personal running activity tracker" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🏃</span>
+        <span class="brand-name">Runs<span class="accent">Tracker</span></span>
+      </div>
+      <nav class="nav">
+        <a href="/" data-route="/" class="nav-link">Runs</a>
+        <a href="/stats" data-route="/stats" class="nav-link">Stats</a>
+      </nav>
+    </header>
+
+    <main id="app"></main>
+
+    <!-- Sliding detail panel -->
+    <div id="overlay" class="overlay"></div>
+    <aside id="panel" class="panel" aria-hidden="true"></aside>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

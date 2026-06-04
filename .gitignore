@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Local build artifacts (the committed frontend/dist/index.html placeholder
+# is kept so `go build` can satisfy //go:embed; real builds happen in Docker)
+frontend/dist/assets/
+runs-tracker
+/out/
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# Editor / OS
+.DS_Store
+*.swp

@@ -1,7 +1,7 @@
 import { fetchRun, gpxUrl } from './api.js'
 import { renderRoute } from './map.js'
 import { lineChart } from './charts.js'
-import { fmtKm, fmtPace, fmtDuration, fmtDate, fmtTime, esc } from './utils.js'
+import { fmtKm, fmtPace, fmtDuration, fmtDate, fmtTime, esc, stripEmoji } from './utils.js'
 
 let activeCharts = []
 let activeMap = null
@@ -85,7 +85,7 @@ function renderPanel(run) {
   <button class="panel-close" aria-label="Close">✕</button>
   <div class="panel-inner">
     <div class="panel-header">
-      <h2>${esc(run.name) || 'Run'}</h2>
+      <h2>${esc(stripEmoji(run.name)) || 'Run'}</h2>
       <div class="panel-meta">${fmtDate(run.start_date_local)} · ${fmtTime(run.start_date_local)}${run.device_name ? ' · ' + esc(run.device_name) : ''}</div>
     </div>
 
@@ -133,7 +133,7 @@ function renderPanel(run) {
       </div>
     </div>
 
-    <a class="btn-download" href="${gpxUrl(run.id)}" download>⬇ Download GPX</a>
+    <a class="btn-download" href="${gpxUrl(run.id)}" download>↓ Download GPX</a>
   </div>`
 }
 

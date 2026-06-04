@@ -1,7 +1,7 @@
 import { fetchRuns } from './api.js'
 import { renderRoute } from './map.js'
 import { openPanel } from './detail.js'
-import { fmtPace, fmtDuration, fmtDateShort, esc } from './utils.js'
+import { fmtPace, fmtDuration, fmtDateShort, esc, stripEmoji } from './utils.js'
 
 const state = {
   page: 1,
@@ -115,7 +115,7 @@ function card(run) {
     <div id="thumb-${run.id}" class="thumb"></div>
     <div class="card-body">
       <div class="card-date">${fmtDateShort(run.start_date_local)}</div>
-      <h3 class="card-name">${esc(run.name) || 'Run'}</h3>
+      <h3 class="card-name">${esc(stripEmoji(run.name)) || 'Run'}</h3>
       <div class="card-stats">
         <div class="cs"><span class="cs-v">${run.distance_km.toFixed(2)}</span><span class="cs-l">km</span></div>
         <div class="cs"><span class="cs-v">${fmtPace(run.pace_sec_per_km)}</span><span class="cs-l">/km</span></div>

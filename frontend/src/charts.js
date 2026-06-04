@@ -12,9 +12,9 @@ Chart.register(
 )
 
 const ORANGE = '#ff6b35'
-const ORANGE2 = '#ff9a56'
-const GRID = 'rgba(255,255,255,0.06)'
-const TICK = 'rgba(255,255,255,0.55)'
+const ORANGE2 = '#ff8f4f'
+const GRID = 'rgba(255,255,255,0.05)'
+const TICK = 'rgba(255,255,255,0.7)'
 
 Chart.defaults.color = TICK
 Chart.defaults.font.family = 'system-ui, -apple-system, Segoe UI, Roboto, sans-serif'

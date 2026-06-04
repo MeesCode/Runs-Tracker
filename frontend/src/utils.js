@@ -52,7 +52,16 @@ export function fmtTime(ts) {
 export function fmtDateShort(ts) {
   const d = parse(ts)
   if (!d) return ts || ''
-  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}`
+}
+
+// Strip emoji / pictographic symbols from user-provided text, keeping the
+// actual words. Collapses the whitespace they leave behind.
+export function stripEmoji(str) {
+  return String(str ?? '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{1F1E6}-\u{1F1FF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}]/gu, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
 }
 
 // Escape user-provided strings for safe innerHTML use.

@@ -2,8 +2,8 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
 const ORANGE = '#ff6b35'
-const TILE = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
-const ATTR = '&copy; OpenStreetMap contributors'
+const TILE = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+const ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'
 
 // Render a route polyline into a container element. `points` is [{lat,lng}].
 // `interactive` controls zoom/drag (off for card thumbnails).

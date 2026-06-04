@@ -3,81 +3,9 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"fmt"
-	"io"
+	"hash/fnv"
 	"net/http"
-	"os"
-	"time"
 )
-
-// stravaCredentialsPath is where the OAuth credentials live on the host/container.
-const stravaCredentialsPath = "/root/.strava_credentials.json"
-
-const (
-	stravaActivityURL = "https://www.strava.com/api/v3/activities/%d"
-	stravaListURL     = "https://www.strava.com/api/v3/athlete/activities?per_page=200&page=%d"
-)
-
-// stravaCredentials mirrors the standard Strava OAuth token file.
-type stravaCredentials struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresAt    int64  `json:"expires_at"` // unix seconds
-	TokenType    string `json:"token_type"`
-	ClientID     string `json:"client_id"`
-	ClientSecret string `json:"client_secret"`
-}
-
-// expired reports whether the access token is past its expiry. A zero ExpiresAt
-// is treated as "unknown / not expired" so manually-provided tokens still work.
-func (c *stravaCredentials) expired(now time.Time) bool {
-	return c.ExpiresAt > 0 && now.Unix() >= c.ExpiresAt
-}
-
-// loadStravaCredentials reads and parses the credentials file.
-func loadStravaCredentials() (*stravaCredentials, error) {
-	raw, err := os.ReadFile(stravaCredentialsPath)
-	if err != nil {
-		return nil, err
-	}
-	var c stravaCredentials
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
-// stravaInvestigateReq is the request body for POST /api/investigate/strava.
-type stravaInvestigateReq struct {
-	RunIDs []int64 `json:"run_ids"`
-	All    bool    `json:"all"`
-}
-
-// stravaGet performs an authenticated GET against the Strava API. The returned
-// transport error is non-nil only for network-level failures (DNS, connection,
-// timeout); HTTP-level problems are reported via the status code.
-func stravaGet(token, url string) (body []byte, status int, err error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	return b, resp.StatusCode, nil
-}
-
-// isRun reports whether a Strava activity is a running activity (Run, TrailRun,
-// VirtualRun, …) so a full re-sync doesn't pull in rides, swims, etc.
-func isRun(a *stravaActivity) bool {
-	return a.Type == "Run" || a.SportType == "Run" ||
-		a.SportType == "TrailRun" || a.SportType == "VirtualRun"
-}
 
 // upsertActivity inserts (or replaces, keyed on the unique strava_id) one Strava
 // activity, mapping fields exactly as seedFromExport does.
@@ -120,110 +48,41 @@ func upsertActivity(db *sql.DB, a *stravaActivity) error {
 	return err
 }
 
-// POST /api/investigate/strava
+// stravaIngestReq is the request body for POST /api/ingest/strava. Each entry in
+// Runs is a raw Strava activity object (same shape as strava-export.json).
+type stravaIngestReq struct {
+	Runs []stravaActivity `json:"runs"`
+}
+
+// POST /api/ingest/strava
 //
-// Re-fetches runs from the Strava API and upserts them into the database.
-// Body: {"run_ids": [..]} to fetch specific activities, or {"all": true} for a
-// full re-sync via the paginated athlete-activities endpoint.
-func (a *App) handleInvestigateStrava(w http.ResponseWriter, r *http.Request) {
+// Accepts a JSON body of Strava activities and upserts each into the runs table
+// (INSERT OR REPLACE keyed on strava_id), using the same mapping as the seed.
+func (a *App) handleIngestStrava(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	var req stravaInvestigateReq
+	var req stravaIngestReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
-	if !req.All && len(req.RunIDs) == 0 {
-		writeErr(w, http.StatusBadRequest, "provide either \"run_ids\" or \"all\": true")
-		return
-	}
-
-	creds, err := loadStravaCredentials()
-	if err != nil {
-		if os.IsNotExist(err) || os.IsPermission(err) {
-			writeErr(w, http.StatusUnauthorized,
-				"strava credentials unavailable at "+stravaCredentialsPath+" ("+err.Error()+"); create/mount the file and refresh the access token")
-			return
-		}
-		writeErr(w, http.StatusInternalServerError, "reading strava credentials: "+err.Error())
-		return
-	}
-	if creds.AccessToken == "" || creds.expired(time.Now()) {
-		writeErr(w, http.StatusUnauthorized,
-			"strava access token missing or expired; refresh the token in "+stravaCredentialsPath)
+	if len(req.Runs) == 0 {
+		writeErr(w, http.StatusBadRequest, "\"runs\" array is empty or missing")
 		return
 	}
 
 	imported, errCount := 0, 0
 	names := []string{}
-
-	upsertOne := func(act *stravaActivity) {
-		if err := upsertActivity(a.db, act); err != nil {
+	for i := range req.Runs {
+		if err := upsertActivity(a.db, &req.Runs[i]); err != nil {
 			errCount++
-			return
+			continue
 		}
 		imported++
-		names = append(names, act.Name)
-	}
-
-	if req.All {
-		for page := 1; ; page++ {
-			body, status, err := stravaGet(creds.AccessToken, fmt.Sprintf(stravaListURL, page))
-			if err != nil {
-				writeErr(w, http.StatusBadGateway, "strava request failed: "+err.Error())
-				return
-			}
-			if status == http.StatusUnauthorized {
-				writeErr(w, http.StatusUnauthorized,
-					"strava rejected the access token; refresh the token in "+stravaCredentialsPath)
-				return
-			}
-			if status != http.StatusOK {
-				writeErr(w, http.StatusBadGateway, fmt.Sprintf("strava list returned status %d", status))
-				return
-			}
-			var acts []stravaActivity
-			if err := json.Unmarshal(body, &acts); err != nil {
-				writeErr(w, http.StatusBadGateway, "decoding strava response: "+err.Error())
-				return
-			}
-			if len(acts) == 0 {
-				break
-			}
-			for i := range acts {
-				if !isRun(&acts[i]) {
-					continue
-				}
-				upsertOne(&acts[i])
-			}
-		}
-	} else {
-		for _, id := range req.RunIDs {
-			body, status, err := stravaGet(creds.AccessToken, fmt.Sprintf(stravaActivityURL, id))
-			if err != nil {
-				writeErr(w, http.StatusBadGateway, "strava request failed: "+err.Error())
-				return
-			}
-			if status == http.StatusUnauthorized {
-				writeErr(w, http.StatusUnauthorized,
-					"strava rejected the access token; refresh the token in "+stravaCredentialsPath)
-				return
-			}
-			if status != http.StatusOK {
-				// e.g. 404 for an unknown id — count it and keep going.
-				errCount++
-				continue
-			}
-			var act stravaActivity
-			if err := json.Unmarshal(body, &act); err != nil {
-				errCount++
-				continue
-			}
-			upsertOne(&act)
-		}
+		names = append(names, req.Runs[i].Name)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -233,35 +92,113 @@ func (a *App) handleInvestigateStrava(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// healthInvestigateReq is the request body for POST /api/investigate/health.
-type healthInvestigateReq struct {
-	ActivityIDs []string `json:"activity_ids"`
-	All         bool     `json:"all"`
+// healthActivity is the best-guess Google Health API v4 activity shape.
+type healthActivity struct {
+	ID                          string  `json:"id"`
+	Name                        string  `json:"name"`
+	Description                 string  `json:"description"`
+	ActivityType                string  `json:"activityType"`
+	StartTime                   string  `json:"startTime"`
+	EndTime                     string  `json:"endTime"`
+	DistanceMeters              float64 `json:"distanceMeters"`
+	MovingTimeSeconds           int     `json:"movingTimeSeconds"`
+	AverageSpeedMetersPerSecond float64 `json:"averageSpeedMetersPerSecond"`
+	MaxSpeedMetersPerSecond     float64 `json:"maxSpeedMetersPerSecond"`
+	AverageHeartRate            float64 `json:"averageHeartRate"`
+	MaxHeartRate                float64 `json:"maxHeartRate"`
+	AverageCadence              float64 `json:"averageCadence"`
+	ElevationGainMeters         float64 `json:"elevationGainMeters"`
+	Calories                    int     `json:"calories"`
+	RoutePolyline               string  `json:"routePolyline"`
+	StartLatitude               float64 `json:"startLatitude"`
+	StartLongitude              float64 `json:"startLongitude"`
+	EndLatitude                 float64 `json:"endLatitude"`
+	EndLongitude                float64 `json:"endLongitude"`
 }
 
-// POST /api/investigate/health
+// healthIngestReq is the request body for POST /api/ingest/health.
+type healthIngestReq struct {
+	Activities []healthActivity `json:"activities"`
+}
+
+// healthStravaID derives a stable, positive synthetic strava_id from a Google
+// Health activity id by hashing it, so ingestion stays idempotent (INSERT OR
+// REPLACE) for the same source activity.
+func healthStravaID(id string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("gh_" + id))
+	return int64(h.Sum64() & 0x7fffffffffffffff)
+}
+
+// upsertHealthActivity maps a Google Health activity onto the runs table,
+// reusing the Strava upsert path so the column mapping stays in one place.
+func upsertHealthActivity(db *sql.DB, h *healthActivity) error {
+	a := stravaActivity{
+		ID:                 healthStravaID(h.ID),
+		Name:               h.Name,
+		Description:        h.Description,
+		Type:               "Run",
+		SportType:          "Run",
+		Timezone:           "Europe/Amsterdam",
+		StartDate:          h.StartTime,
+		StartDateLocal:     h.StartTime,
+		Distance:           h.DistanceMeters,
+		MovingTime:         h.MovingTimeSeconds,
+		ElapsedTime:        h.MovingTimeSeconds,
+		AverageSpeed:       h.AverageSpeedMetersPerSecond,
+		MaxSpeed:           h.MaxSpeedMetersPerSecond,
+		AverageCadence:     h.AverageCadence,
+		HasHeartrate:       h.AverageHeartRate > 0,
+		AverageHeartrate:   h.AverageHeartRate,
+		MaxHeartrate:       h.MaxHeartRate,
+		TotalElevationGain: h.ElevationGainMeters,
+		Calories:           h.Calories,
+		DeviceName:         "Google Health",
+	}
+	a.Map.SummaryPolyline = h.RoutePolyline
+	if h.StartLatitude != 0 || h.StartLongitude != 0 {
+		a.StartLatLng = []float64{h.StartLatitude, h.StartLongitude}
+	}
+	if h.EndLatitude != 0 || h.EndLongitude != 0 {
+		a.EndLatLng = []float64{h.EndLatitude, h.EndLongitude}
+	}
+	return upsertActivity(db, &a)
+}
+
+// POST /api/ingest/health
 //
-// Placeholder for a future Google Health API integration. Validates the request
-// shape and always reports that OAuth has not yet been configured.
-func (a *App) handleInvestigateHealth(w http.ResponseWriter, r *http.Request) {
+// Accepts a JSON body of Google Health activities and upserts each into the runs
+// table. A synthetic strava_id is derived from the Google Health activity id.
+func (a *App) handleIngestHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	var req healthInvestigateReq
+	var req healthIngestReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
-	if !req.All && len(req.ActivityIDs) == 0 {
-		writeErr(w, http.StatusBadRequest, "provide either \"activity_ids\" or \"all\": true")
+	if len(req.Activities) == 0 {
+		writeErr(w, http.StatusBadRequest, "\"activities\" array is empty or missing")
 		return
 	}
 
+	imported, errCount := 0, 0
+	names := []string{}
+	for i := range req.Activities {
+		if err := upsertHealthActivity(a.db, &req.Activities[i]); err != nil {
+			errCount++
+			continue
+		}
+		imported++
+		names = append(names, req.Activities[i].Name)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "not_configured",
-		"message": "Google Health API OAuth not yet configured. Set up OAuth credentials and a refresh token to use this endpoint.",
-		"hint":    "See /home/coder/google-health-discovery.json for the API spec",
+		"imported":   imported,
+		"errors":     errCount,
+		"activities": names,
 	})
 }

@@ -42,8 +42,8 @@ func main() {
 	mux.HandleFunc("/api/runs", app.handleRuns)        // list (also catches trailing)
 	mux.HandleFunc("/api/runs/", app.handleRunByPath)  // /api/runs/:id and /:id/gpx
 	mux.HandleFunc("/api/stats", app.handleStats)
-	mux.HandleFunc("/api/investigate/strava", app.handleInvestigateStrava)
-	mux.HandleFunc("/api/investigate/health", app.handleInvestigateHealth)
+	mux.HandleFunc("/api/ingest/strava", app.handleIngestStrava)
+	mux.HandleFunc("/api/ingest/health", app.handleIngestHealth)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

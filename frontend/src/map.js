@@ -21,6 +21,7 @@ export function renderRoute(container, points, { interactive = true, markers = t
     boxZoom: interactive,
     keyboard: interactive,
     tap: interactive,
+    touchDrag: interactive,
     attributionControl: interactive,
   })
 

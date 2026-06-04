@@ -226,7 +226,7 @@ select:focus { border-color: rgba(255, 255, 255, 0.2); }
   color: var(--muted);
   font-size: 15px;
   cursor: pointer;
-  z-index: 5;
+  z-index: 1100; /* above Leaflet zoom controls (z-index 1000+) */
   transition: color .18s, border-color .18s;
 }
 .panel-close:hover { border-color: rgba(255, 255, 255, 0.2); color: var(--text); }
@@ -385,7 +385,15 @@ table.splits tbody tr:hover td { background: rgba(255, 255, 255, 0.02); }
    detail panel is open we hide the card maps entirely to stop tiles bleeding
    through. Scoped to `.run-card` so the detail panel's own map (zoom controls,
    attribution) keeps working. */
-.run-card .leaflet-container { z-index: 1; }
+/* Card thumbnails are non-interactive previews; keep their Leaflet panes below
+   the sliding detail panel, and let touch gestures pass through to the page so
+   mobile scrolling stays smooth. The detail panel's `.detail-map` is not scoped
+   under `.run-card`, so it remains fully interactive. */
+.run-card .leaflet-container {
+  z-index: 1;
+  touch-action: none;
+  pointer-events: none;
+}
 body.detail-open .run-card .leaflet-container {
   z-index: -1;
   visibility: hidden;

@@ -380,23 +380,17 @@ table.splits tbody tr:hover td { background: rgba(255, 255, 255, 0.02); }
 /* Leaflet tweaks for dark theme */
 .leaflet-container { background: #0d0d0f; font-family: inherit; }
 
-/* Keep card-thumbnail Leaflet panes below the sliding detail panel (z-index 100)
-   and the overlay (z-index 90). Leaflet panes set their own stacking, so when the
-   detail panel is open we hide the card maps entirely to stop tiles bleeding
-   through. Scoped to `.run-card` so the detail panel's own map (zoom controls,
-   attribution) keeps working. */
-/* Card thumbnails are non-interactive previews; keep their Leaflet panes below
-   the sliding detail panel, and let touch gestures pass through to the page so
-   mobile scrolling stays smooth. The detail panel's `.detail-map` is not scoped
-   under `.run-card`, so it remains fully interactive. */
+/* Card thumbnails are non-interactive previews. `z-index: 1` plus Leaflet's own
+   `position: relative` on the container establishes a stacking context, so the
+   card's internal panes/controls stay confined to z-index 1 — below the overlay
+   (90) and detail panel (100) and unable to bleed through. `pointer-events: none`
+   lets touch gestures pass through to the page so mobile scrolling stays smooth.
+   The detail panel's `.detail-map` is not scoped under `.run-card`, so it remains
+   fully interactive. */
 .run-card .leaflet-container {
   z-index: 1;
   touch-action: none;
   pointer-events: none;
-}
-body.detail-open .run-card .leaflet-container {
-  z-index: -1;
-  visibility: hidden;
 }
 
 /* ---------- Responsive ---------- */

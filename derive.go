@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 )
@@ -51,10 +52,10 @@ func (r *seededRand) next() float64 {
 }
 
 // computeDerived fills the display/derived fields on a Run. When `detail` is
-// true it also builds the elevation, cadence and HR series for the detail view.
+// true it also builds the elevation and HR series for the detail view.
 //
 // The Strava summary export contains no per-point streams or splits, so km
-// splits, pace variation, cadence and elevation profiles are ESTIMATED from the
+// splits, pace variation and elevation profiles are ESTIMATED from the
 // route geometry plus the run's aggregate values (average pace/cadence,
 // elev_high/elev_low). They are flagged via SplitsEstimated so the UI can label
 // them. Heart-rate series are only produced when has_heartrate is set.
@@ -66,18 +67,72 @@ func computeDerived(r *Run, detail bool) {
 	r.DurationHuman = formatDuration(r.MovingTimeSeconds)
 	r.Polyline = decodePolyline(r.SummaryPolyline)
 
-	// Build estimated km splits from geometry + aggregate pace.
-	r.Splits = buildSplits(r)
-	r.SplitsEstimated = true
+	// Prefer real Strava split data when present; fall back to estimating
+	// km splits from geometry + aggregate pace.
+	if real := parseStravaSplits(r.SplitsMetric); len(real) > 0 {
+		r.Splits = real
+		r.SplitsEstimated = false
+	} else {
+		r.Splits = buildSplits(r)
+		r.SplitsEstimated = true
+	}
 	r.BestEffortsCalc = bestEffortsFromSplits(r.Splits)
 
 	if detail {
 		r.ElevationProfile = buildElevationProfile(r)
-		r.CadenceSeries = buildCadenceSeries(r)
 		if r.HasHeartrate && r.AverageHeartrate > 0 {
 			r.HRSeries = buildHRSeries(r)
 		}
 	}
+}
+
+// stravaSplit mirrors one entry of Strava's splits_metric array.
+type stravaSplit struct {
+	Split               int     `json:"split"`
+	Distance            float64 `json:"distance"`
+	ElapsedTime         float64 `json:"elapsed_time"`
+	ElevationDifference float64 `json:"elevation_difference"`
+	AverageHeartrate    float64 `json:"average_heartrate"`
+}
+
+// parseStravaSplits parses the raw splits_metric JSON stored on the run and
+// maps it to the local Split struct. Returns nil when the data is empty or
+// unparseable so the caller can fall back to estimated splits.
+func parseStravaSplits(raw string) []Split {
+	if raw == "" {
+		return nil
+	}
+	var ss []stravaSplit
+	if err := json.Unmarshal([]byte(raw), &ss); err != nil || len(ss) == 0 {
+		return nil
+	}
+	out := make([]Split, 0, len(ss))
+	for i, s := range ss {
+		idx := s.Split
+		if idx == 0 {
+			idx = i + 1
+		}
+		paceSec := 0.0
+		if s.Distance > 0 {
+			paceSec = s.ElapsedTime / (s.Distance / 1000)
+		}
+		elevDiff := s.ElevationDifference
+		elevGain := elevDiff
+		if elevGain < 0 {
+			elevGain = 0
+		}
+		out = append(out, Split{
+			Split:              idx,
+			DistanceMeters:     round2(s.Distance),
+			ElapsedSeconds:     round2(s.ElapsedTime),
+			PaceSecPerKM:       round2(paceSec),
+			Pace:               formatPace(paceSec),
+			ElevationGain:      round2(elevGain),
+			ElevationDifference: round2(elevDiff),
+			AverageHeartrate:   s.AverageHeartrate,
+		})
+	}
+	return out
 }
 
 // buildSplits divides the route into 1 km segments. Time per segment is the
@@ -141,7 +196,7 @@ func bestEffortsFromSplits(splits []Split) BestEfize {
 func bestWindow(splits []Split, km int) string {
 	full := []Split{}
 	for _, s := range splits {
-		if s.DistanceMeters >= 999 {
+		if s.DistanceMeters >= 990 {
 			full = append(full, s)
 		}
 	}
@@ -161,9 +216,39 @@ func bestWindow(splits []Split, km int) string {
 	return formatDuration(int(math.Round(best)))
 }
 
-// buildElevationProfile samples the route, producing a smooth deterministic
-// profile bounded by elev_low/elev_high consistent with total_elevation_gain.
+// buildElevationProfile samples the route. When real split data exists (each
+// split has elevation_difference), it builds an accurate cumulative elevation
+// profile from the per-split elevation changes. Falls back to a smooth
+// deterministic sine-wave profile bounded by elev_low/elev_high.
 func buildElevationProfile(r *Run) []ElevPt {
+	// Use real per-split elevation data when available.
+	if !r.SplitsEstimated && len(r.Splits) > 0 {
+		return buildRealElevationProfile(r)
+	}
+	return buildSyntheticElevationProfile(r)
+}
+
+// buildRealElevationProfile builds an elevation profile from the cumulative
+// signed elevation_difference in each split.
+func buildRealElevationProfile(r *Run) []ElevPt {
+	cumElev := 0.0
+	cumDist := 0.0
+	out := make([]ElevPt, 0, len(r.Splits)+1)
+	out = append(out, ElevPt{DistanceKM: 0, Elevation: 0})
+	for _, s := range r.Splits {
+		cumDist += s.DistanceMeters / 1000
+		cumElev += s.ElevationDifference
+		out = append(out, ElevPt{
+			DistanceKM: round2(cumDist),
+			Elevation:  round1(cumElev),
+		})
+	}
+	return out
+}
+
+// buildSyntheticElevationProfile produces a smooth deterministic profile
+// bounded by elev_low/elev_high consistent with total_elevation_gain.
+func buildSyntheticElevationProfile(r *Run) []ElevPt {
 	pts := r.Polyline
 	if len(pts) < 2 {
 		return nil
@@ -194,16 +279,6 @@ func buildElevationProfile(r *Run) []ElevPt {
 		})
 	}
 	return out
-}
-
-// buildCadenceSeries produces a per-sample cadence series around the average.
-// Strava reports cadence in revolutions/min per leg; doubled for steps/min.
-func buildCadenceSeries(r *Run) []SeriesPt {
-	if r.AverageCadence <= 0 {
-		return nil
-	}
-	avg := r.AverageCadence * 2 // steps per minute
-	return wobbleSeries(r, avg, 0.07, 11)
 }
 
 func buildHRSeries(r *Run) []SeriesPt {

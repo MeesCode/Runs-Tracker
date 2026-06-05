@@ -63,13 +63,14 @@ type Run struct {
 
 // Split is one kilometre split.
 type Split struct {
-	Split             int     `json:"split"`            // 1-based km index
-	DistanceMeters    float64 `json:"distance_meters"`  // length of this segment
-	ElapsedSeconds    float64 `json:"elapsed_seconds"`  // time for this segment
-	PaceSecPerKM      float64 `json:"pace_sec_per_km"`  // pace, seconds per km
-	Pace              string  `json:"pace"`             // formatted m:ss
-	ElevationGain     float64 `json:"elevation_gain"`   // meters
-	AverageHeartrate  float64 `json:"average_heartrate,omitempty"`
+	Split              int     `json:"split"`                        // 1-based km index
+	DistanceMeters     float64 `json:"distance_meters"`              // length of this segment
+	ElapsedSeconds     float64 `json:"elapsed_seconds"`              // time for this segment
+	PaceSecPerKM       float64 `json:"pace_sec_per_km"`              // pace, seconds per km
+	Pace               string  `json:"pace"`                         // formatted m:ss
+	ElevationGain      float64 `json:"elevation_gain"`               // meters (positive only)
+	ElevationDifference float64 `json:"elevation_difference,omitempty"` // signed elevation change (for profile building)
+	AverageHeartrate   float64 `json:"average_heartrate,omitempty"`
 }
 
 // ElevPt is one point on the elevation profile.

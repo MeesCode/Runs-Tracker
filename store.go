@@ -150,6 +150,7 @@ type Stats struct {
 	RunsThisYear       int        `json:"runs_this_year"`
 	CurrentStreakDays  int        `json:"current_streak_days"`
 	BestEfforts        BestEfize  `json:"best_efforts"`
+	HasEstimatedSplits bool       `json:"has_estimated_splits"`
 	// Extras used by the stats page charts.
 	Progression []ProgPt `json:"progression"`
 	Heatmap     []DayCnt `json:"heatmap"`
@@ -195,6 +196,10 @@ func computeStats(db *sql.DB, now time.Time) (*Stats, error) {
 			return nil, err
 		}
 		computeDerived(r, false)
+
+		if r.SplitsEstimated {
+			st.HasEstimatedSplits = true
+		}
 
 		st.TotalRuns++
 		totalDistance += r.DistanceMeters

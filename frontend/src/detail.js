@@ -66,6 +66,7 @@ function renderPanel(run) {
   const splits = run.splits || []
   const be = run.best_efforts || {}
   const hasHR = run.has_heartrate && (run.hr_series || []).length > 0
+  const hasCadence = (run.cadence_series || []).length > 0
 
   const splitRows = splits.map((s) => `
     <tr>
@@ -74,7 +75,10 @@ function renderPanel(run) {
       <td>${fmtDuration(s.elapsed_seconds)}</td>
       <td>${fmtPace(s.pace_sec_per_km)}/km</td>
       <td>${s.elevation_gain.toFixed(0)} m</td>
+      ${s.average_heartrate > 0 ? `<td>${s.average_heartrate.toFixed(0)}</td>` : '<td>—</td>'}
     </tr>`).join('')
+
+  const hasHRCol = splits.some((s) => s.average_heartrate > 0)
 
   const beItems = [['1k', be['1k']], ['5k', be['5k']], ['10k', be['10k']]]
     .filter(([, v]) => v)
@@ -99,24 +103,24 @@ function renderPanel(run) {
     <div id="detail-map" class="detail-map"></div>
 
     ${beItems ? `<div class="card section">
-      <h3>Best efforts <span class="est">est.</span></h3>
+      <h3>Best efforts${run.splits_estimated ? ' <span class="est">est.</span>' : ''}</h3>
       <div class="efforts">${beItems}</div>
     </div>` : ''}
 
     <div class="card section">
-      <h3>Pace <span class="est">estimated</span></h3>
+      <h3>Pace${run.splits_estimated ? ' <span class="est">estimated</span>' : ''}</h3>
       <div class="chart-box"><canvas id="ch-pace"></canvas></div>
     </div>
 
     <div class="card section">
-      <h3>Elevation profile <span class="est">estimated</span></h3>
+      <h3>Elevation profile${run.splits_estimated ? ' <span class="est">estimated</span>' : ''}</h3>
       <div class="chart-box"><canvas id="ch-elev"></canvas></div>
     </div>
 
-    <div class="card section">
-      <h3>Cadence <span class="est">estimated</span></h3>
+    ${hasCadence ? `<div class="card section">
+      <h3>Cadence</h3>
       <div class="chart-box"><canvas id="ch-cad"></canvas></div>
-    </div>
+    </div>` : ''}
 
     ${hasHR ? `<div class="card section">
       <h3>Heart rate</h3>
@@ -124,11 +128,11 @@ function renderPanel(run) {
     </div>` : ''}
 
     <div class="card section">
-      <h3>Splits <span class="est">estimated</span></h3>
+      <h3>Splits${run.splits_estimated ? ' <span class="est">estimated</span>' : ''}</h3>
       <div class="table-wrap">
         <table class="splits">
-          <thead><tr><th>Km</th><th>Dist</th><th>Time</th><th>Pace</th><th>Elev</th></tr></thead>
-          <tbody>${splitRows || '<tr><td colspan="5">No splits</td></tr>'}</tbody>
+          <thead><tr><th>Km</th><th>Dist</th><th>Time</th><th>Pace</th><th>Elev</th>${hasHRCol ? '<th>HR</th>' : ''}</tr></thead>
+          <tbody>${splitRows || `<tr><td colspan="${hasHRCol ? 6 : 5}">No splits</td></tr>`}</tbody>
         </table>
       </div>
     </div>

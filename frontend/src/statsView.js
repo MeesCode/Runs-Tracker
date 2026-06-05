@@ -42,7 +42,7 @@ export async function renderStatsView(app) {
       </div>
 
       <div class="card section">
-        <h3>Best efforts <span class="est">est.</span></h3>
+        <h3>Best efforts${st.has_estimated_splits ? ' <span class="est">est.</span>' : ''}</h3>
         <div class="efforts">
           ${effort('1k', st.best_efforts['1k'])}
           ${effort('5k', st.best_efforts['5k'])}
@@ -51,7 +51,7 @@ export async function renderStatsView(app) {
       </div>
 
       <div class="card section">
-        <h3>Pace progression <span class="est">est.</span></h3>
+        <h3>Pace progression</h3>
         <div class="chart-box"><canvas id="s-pace"></canvas></div>
       </div>
 

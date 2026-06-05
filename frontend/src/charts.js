@@ -60,7 +60,12 @@ export function lineChart(canvas, { labels, data, xTitle, yTitle, fill = true, r
     },
     options: {
       ...common,
-      scales: baseScales(xTitle, yTitle, { reverseY }),
+      scales: baseScales(xTitle, yTitle, {
+        reverseY,
+        y: reverseY || paceTooltip
+          ? { ticks: { callback: (v) => paceTick(v) } }
+          : {},
+      }),
       plugins: {
         ...common.plugins,
         tooltip: paceTooltip ? { callbacks: { label: (c) => paceLabel(c.parsed.y) } } : {},
@@ -90,4 +95,11 @@ function paceLabel(secPerKm) {
   const m = Math.floor(secPerKm / 60)
   const s = Math.round(secPerKm % 60)
   return `${m}:${String(s).padStart(2, '0')} /km`
+}
+
+function paceTick(secPerKm) {
+  if (!secPerKm || secPerKm <= 0) return secPerKm
+  const m = Math.floor(secPerKm / 60)
+  const s = Math.round(secPerKm % 60)
+  return `${m}:${String(s).padStart(2, '0')}`
 }

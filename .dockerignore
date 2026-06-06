@@ -6,3 +6,9 @@ runs.db-*
 .git
 .gitignore
 README.md
+.env
+.env.local
+google_client_secret.json
+google_token.json
+*token*.json
+*client_secret*.json

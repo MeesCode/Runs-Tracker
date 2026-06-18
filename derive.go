@@ -81,7 +81,13 @@ func computeDerived(r *Run, detail bool) {
 	if detail {
 		r.ElevationProfile = buildElevationProfile(r)
 		if r.HasHeartrate && r.AverageHeartrate > 0 {
-			r.HRSeries = buildHRSeries(r)
+			// Prefer the real per-point Strava HR stream when stored; fall back
+			// to the synthetic wobble only when no stream is available.
+			if real := buildHRSeriesFromStream(r.HRStream, r.DistanceMeters/1000); len(real) > 0 {
+				r.HRSeries = real
+			} else {
+				r.HRSeries = buildHRSeries(r)
+			}
 		}
 	}
 }
@@ -283,6 +289,87 @@ func buildSyntheticElevationProfile(r *Run) []ElevPt {
 
 func buildHRSeries(r *Run) []SeriesPt {
 	return wobbleSeries(r, r.AverageHeartrate, 0.1, 23)
+}
+
+// storedHRStream is the compact JSON we persist in runs.hr_stream: two parallel
+// arrays where heartrate[i] is the BPM recorded at the cumulative distance (m)
+// in distance[i]. Written by the Strava stream fetch in strava.go.
+type storedHRStream struct {
+	Heartrate []float64 `json:"heartrate"`
+	Distance  []float64 `json:"distance"`
+}
+
+// buildHRSeriesFromStream turns the raw per-point Strava HR stream into the
+// ~40-point per-distance series the detail view expects. Each output point is
+// the mean HR over an index bucket, placed at that bucket's cumulative
+// distance. Returns nil when no usable stream is present so the caller can fall
+// back to the synthetic wobble.
+func buildHRSeriesFromStream(raw string, totalKM float64) []SeriesPt {
+	if raw == "" {
+		return nil
+	}
+	var s storedHRStream
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		return nil
+	}
+	hr := s.Heartrate
+	n := len(hr)
+	if n == 0 {
+		return nil
+	}
+	hasDist := len(s.Distance) == n
+
+	const samples = 40
+	if n < samples { // short run: emit one point per sample
+		out := make([]SeriesPt, 0, n)
+		for i := 0; i < n; i++ {
+			out = append(out, SeriesPt{
+				DistanceKM: round2(distAt(s.Distance, hasDist, i, n, totalKM)),
+				Value:      round1(hr[i]),
+			})
+		}
+		return out
+	}
+
+	out := make([]SeriesPt, 0, samples+1)
+	step := float64(n) / float64(samples)
+	for i := 0; i <= samples; i++ {
+		lo := int(float64(i) * step)
+		hiIdx := int(float64(i+1) * step)
+		if i == samples {
+			lo = n - 1
+			hiIdx = n
+		}
+		if hiIdx > n {
+			hiIdx = n
+		}
+		if hiIdx <= lo {
+			hiIdx = lo + 1
+		}
+		sum := 0.0
+		for j := lo; j < hiIdx; j++ {
+			sum += hr[j]
+		}
+		avg := sum / float64(hiIdx-lo)
+		out = append(out, SeriesPt{
+			DistanceKM: round2(distAt(s.Distance, hasDist, lo, n, totalKM)),
+			Value:      round1(avg),
+		})
+	}
+	return out
+}
+
+// distAt returns the cumulative distance in km for stream index i, using the
+// real distance array when available (meters) or falling back to even spacing
+// across the run's total distance.
+func distAt(dist []float64, hasDist bool, i, n int, totalKM float64) float64 {
+	if hasDist && i < len(dist) {
+		return dist[i] / 1000
+	}
+	if n <= 1 {
+		return 0
+	}
+	return float64(i) / float64(n-1) * totalKM
 }
 
 // wobbleSeries builds a per-distance series oscillating around `avg`.

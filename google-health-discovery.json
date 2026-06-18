@@ -1,0 +1,104 @@
+# Google Health API v4 – Comprehensive Summary
+
+## Overview
+
+- **API Name:** Google Health API (v4)
+- **Base URL:** `https://health.googleapis.com/`
+- **Description:** View and manage health and fitness metrics and measurement data.
+- **Documentation:** [developers.google.com/health](https://developers.google.com/health)
+- **Protocol:** REST, Discovery v1
+
+## Authentication & Scopes
+
+The API uses OAuth 2.0. The following scopes are defined:
+
+| Scope | Description |
+|-------|-------------|
+| `cloud-platform` | See, edit, configure, and delete Google Cloud data |
+| `googlehealth.activity_and_fitness.readonly` | See activity and fitness data |
+| `googlehealth.ecg.readonly` | See ECG data |
+| `googlehealth.health_metrics_and_measurements.readonly` | See health metrics and measurements |
+| `googlehealth.irn.readonly` | See Irregular Rhythm Notifications data |
+| `googlehealth.location.readonly` | See exercise GPS location data |
+| `googlehealth.profile.readonly` | See profile data |
+| `googlehealth.settings.readonly` | See settings |
+| `googlehealth.sleep.readonly` | See sleep data |
+
+> **Note:** Most methods require `cloud-platform` for subscriber/subscription management. User data methods use the specific readonly scopes.
+
+## Resources & Methods
+
+### 1. `projects.subscribers` (Cloud Project Subscribers)
+
+Manage webhook endpoints that receive notifications.
+
+| Method | HTTP | Description |
+|--------|------|-------------|
+| `create` | POST | Register a new subscriber endpoint. **Requires endpoint verification** (see below). |
+| `list` | GET | List all subscribers in the project. |
+| `patch` | PATCH | Update subscriber config (endpoint URI, configs, authorization). Re-verifies if endpoint_uri or endpoint_authorization changed. |
+| `delete` | DELETE | Delete a subscriber (optionally force delete child subscriptions). |
+
+#### Endpoint Verification Process (Critical)
+
+> **Verification with Authorization:**  
+> POST to `endpoint_uri` with header `Authorization: <secret>` and body `{"type": "verification"}`. Expect HTTP `201 Created`.  
+> **Verification without Authorization:**  
+> POST to `endpoint_uri` without `Authorization` header, body `{"type": "verification"}`. Expect HTTP `401 Unauthorized` or `403 Forbidden`.  
+> Both tests must pass for creation/update to succeed.
+
+### 2. `projects.subscribers.subscriptions` (User Subscriptions)
+
+Link a user to a subscriber for specific data types.
+
+| Method | HTTP | Description |
+|--------|------|-------------|
+| `create` | POST | Create a subscription for a user (requires `MANUAL` policy). |
+| `list` | GET | List subscriptions, filterable by `user` and `data_type`. |
+| `patch` | PATCH | Update data types for an existing subscription. |
+| `delete` | DELETE | Delete a subscription, stopping notifications. |
+
+**Subscription Create Policy:**
+- `AUTOMATIC`: No need to create subscriptions; notifications sent based on user consents.
+- `MANUAL`: Must call `CreateSubscription` for each user.
+
+### 3. `users` (User Data)
+
+| Method | HTTP | Description |
+|--------|------|-------------|
+| `getProfile` | GET | Get user profile (age, stride lengths, membership start). |
+| `updateProfile` | PATCH | Update profile (e.g., stride lengths). |
+| `getSettings` | GET | Get user settings (units, timezone, language). |
+| `updateSettings` | PATCH | Update settings (e.g., glucose unit, height unit). |
+| `getIdentity` | GET | Get legacy Fitbit user ID and Google Health user ID. |
+| `getIrnProfile` | GET | Get Irregular Rhythm Notification profile (onboarding, enrollment). |
+
+### 4. `users.dataTypes.dataPoints` (Health Data Points)
+
+Core CRUD and aggregation operations.
+
+| Method | HTTP | Description |
+|--------|------|-------------|
+| `get` | GET | Get a single identifiable data point. |
+| `list` | GET | Query data points with filters (time range, civil time, etc.). |
+| `create` | POST | Create a single data point. |
+| `patch` | PATCH | Update an existing data point. |
+| `batchDelete` | POST | Delete up to 10,000 data points. |
+| `reconcile` | GET | Reconcile data from multiple sources into one stream. |
+| `rollUp` | POST | Roll up data over physical time intervals (max 90 days, 14 for some types). |
+| `dailyRollUp` | POST | Roll up data over civil time intervals (daily windows). |
+| `exportExerciseTcx` | GET | Export exercise in TCX format (requires `?alt=media` for HTTP clients). |
+
+#### Filter Syntax (for `list` and `reconcile`)
+
+Supports filtering by time fields. Examples:
+
+```
+steps.interval.start_time >= "2023-11-24T00:00:00Z" AND steps.interval.start_time < "2023-11-25T00:00:00Z"
+weight.sample_time.physical_time >= "2024-08-14T12:34:56Z"
+sleep.interval.end_time >= "2023-11-24T00:00:00Z" AND sleep.interval.end_time < "2023-11-25T00:00:00Z"
+```
+
+Supported fields: `interval.start_time`, `interval.civil_start_time`, `sample_time.physical_time`, `sample_time.civil_time`, `date` (daily summaries), `interval.civil_start_time` (sessions), `electrocardiogram.interval.start_time`, `sleep.interval.end_t
+
+[... summary truncated for context management ...]

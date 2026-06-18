@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -52,10 +53,20 @@ CREATE TABLE IF NOT EXISTS runs (
     laps TEXT,
     best_efforts TEXT,
 
+    hr_stream TEXT,
+
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
 `
+
+// migrations are idempotent ALTER statements applied after the schema so that
+// databases created before a column existed pick it up. SQLite has no
+// "ADD COLUMN IF NOT EXISTS", so each error is checked for the "duplicate
+// column" message and otherwise ignored.
+var migrations = []string{
+	`ALTER TABLE runs ADD COLUMN hr_stream TEXT`,
+}
 
 // openDB opens (creating if needed) the SQLite database and applies the schema.
 func openDB(path string) (*sql.DB, error) {
@@ -65,6 +76,11 @@ func openDB(path string) (*sql.DB, error) {
 	}
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
+	}
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return nil, err
+		}
 	}
 	return db, nil
 }

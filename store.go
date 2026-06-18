@@ -131,6 +131,11 @@ func getRun(db *sql.DB, id int64) (*Run, error) {
 	if err != nil {
 		return nil, err
 	}
+	// hr_stream is a potentially large blob, so it is loaded only here (the
+	// detail view) rather than in the list/stats queries via runColumns.
+	var hrStream sql.NullString
+	_ = db.QueryRow("SELECT hr_stream FROM runs WHERE id = ?", id).Scan(&hrStream)
+	r.HRStream = hrStream.String
 	computeDerived(r, true)
 	return r, nil
 }

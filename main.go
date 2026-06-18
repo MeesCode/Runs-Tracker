@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -18,7 +19,11 @@ var frontendFS embed.FS
 
 // App holds shared dependencies for the HTTP handlers.
 type App struct {
-	db *sql.DB
+	db     *sql.DB
+	auth   *googleAuth
+	strava *stravaAuth
+	syncMu sync.Mutex // serializes Google Health syncs (ticker + manual endpoint)
+	hrMu   sync.Mutex // serializes Strava HR-stream backfills
 }
 
 func main() {
@@ -34,8 +39,14 @@ func main() {
 	if err := seedFromExport(db, seedData); err != nil {
 		log.Fatalf("seed: %v", err)
 	}
+	if removed, err := dedupeRuns(db); err != nil {
+		log.Printf("dedupe: %v", err)
+	} else if removed > 0 {
+		log.Printf("dedupe: removed %d duplicate run(s)", removed)
+	}
 
-	app := &App{db: db}
+	app := &App{db: db, auth: newGoogleAuth(), strava: newStravaAuth()}
+	app.startHealthSyncLoop(6 * time.Hour)
 	mux := http.NewServeMux()
 
 	// API routes.
@@ -44,6 +55,8 @@ func main() {
 	mux.HandleFunc("/api/stats", app.handleStats)
 	mux.HandleFunc("/api/ingest/strava", app.handleIngestStrava)
 	mux.HandleFunc("/api/ingest/health", app.handleIngestHealth)
+	mux.HandleFunc("/api/sync/health", app.handleSyncHealth)
+	mux.HandleFunc("/api/backfill/hr", app.handleBackfillHR)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

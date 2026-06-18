@@ -46,6 +46,7 @@ type Run struct {
 	SplitsMetric string `json:"-"`
 	Laps         string `json:"-"`
 	BestEfforts  string `json:"-"`
+	HRStream     string `json:"-"` // raw per-point HR+distance from Strava streams (nullable)
 
 	// Derived / computed fields populated for API responses.
 	DistanceKM       float64    `json:"distance_km"`
@@ -118,7 +119,7 @@ type stravaActivity struct {
 	ElevHigh           float64         `json:"elev_high"`
 	ElevLow            float64         `json:"elev_low"`
 	Description        string          `json:"description"`
-	Calories           int             `json:"calories"`
+	Calories           float64         `json:"calories"`
 	Map                struct {
 		SummaryPolyline string `json:"summary_polyline"`
 	} `json:"map"`

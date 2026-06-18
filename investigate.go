@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -47,7 +48,7 @@ func upsertActivity(db *sql.DB, a *stravaActivity) error {
 		a.AverageCadence,
 		a.TotalElevationGain, a.ElevHigh, a.ElevLow,
 		startLat, startLng, endLat, endLng,
-		a.Map.SummaryPolyline, a.DeviceName, a.KudosCount, a.Description, a.Calories,
+		a.Map.SummaryPolyline, a.DeviceName, a.KudosCount, a.Description, int(a.Calories),
 		rawOrNull(a.SplitsMetric), rawOrNull(a.Laps), rawOrNull(a.BestEfforts),
 	)
 	return err
@@ -79,21 +80,44 @@ func (a *App) handleIngestStrava(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imported, errCount := 0, 0
+	before := countRuns(a.db)
+	errCount := 0
 	names := []string{}
+	hrFetched := 0
+	stravaReady := a.strava != nil && a.strava.configured()
 	for i := range req.Runs {
-		if err := upsertActivity(a.db, &req.Runs[i]); err != nil {
+		run := &req.Runs[i]
+		if err := upsertActivity(a.db, run); err != nil {
 			errCount++
 			continue
 		}
-		imported++
-		names = append(names, req.Runs[i].Name)
+		names = append(names, run.Name)
+		// Pull the real per-second HR stream for new activities so the detail
+		// view shows actual data instead of the synthetic wobble. Best effort:
+		// failures don't fail the ingest.
+		if stravaReady && run.HasHeartrate && run.ID != 0 {
+			if i > 0 {
+				time.Sleep(stravaRateDelay)
+			}
+			if ok, err := a.storeHRStream(run.ID); err != nil {
+				log.Printf("ingest: HR stream fetch for %d failed: %v", run.ID, err)
+			} else if ok {
+				hrFetched++
+			}
+		}
+	}
+	merged, _ := dedupeRuns(a.db)
+	imported := countRuns(a.db) - before
+	if imported < 0 {
+		imported = 0
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"imported": imported,
-		"errors":   errCount,
-		"runs":     names,
+		"imported":   imported,
+		"merged":     merged,
+		"errors":     errCount,
+		"runs":       names,
+		"hr_fetched": hrFetched,
 	})
 }
 
@@ -276,90 +300,190 @@ func sameMagnitude(a, b, tol float64) bool {
 	return math.Abs(a-b)/hi <= tol
 }
 
-// findDuplicateRunID returns the id of an existing run that is the same activity
-// as the given one, ignoring rows with excludeStravaID (the data point's own row,
-// so re-ingestion is a plain upsert rather than a self-merge).
-//
-// Two records are the same activity when EITHER their time intervals overlap (you
-// can't run two activities at once), OR they fall on the same calendar day with
-// near-identical distance and duration. The second rule catches one run synced
-// from different sources with mismatched start times — e.g. a manual Fitbit entry
-// whose timestamp is shifted from the Strava-recorded run.
-//
-// Candidates are narrowed to the same calendar day in SQL, then checked in Go
-// (start_date strings carry a Z suffix SQLite's date functions don't reliably
-// parse).
-func findDuplicateRunID(db *sql.DB, startUTC string, durationSec int, distanceM float64, excludeStravaID int64) (int64, bool) {
-	t0, err := time.Parse(time.RFC3339, startUTC)
-	if err != nil || len(startUTC) < 10 {
-		return 0, false
-	}
-	t1 := t0.Add(time.Duration(durationSec) * time.Second)
-	rows, err := db.Query(
-		`SELECT id, strava_id, start_date, elapsed_time_seconds, moving_time_seconds, distance_meters
-		   FROM runs WHERE substr(start_date,1,10) = ?`, startUTC[:10])
-	if err != nil {
-		return 0, false
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, sid int64
-		var sd string
-		var elapsed, moving int
-		var dist float64
-		if rows.Scan(&id, &sid, &sd, &elapsed, &moving, &dist) != nil {
-			continue
-		}
-		if sid == excludeStravaID {
-			continue
-		}
-		s0, err := time.Parse(time.RFC3339, sd)
-		if err != nil {
-			continue
-		}
-		dur := elapsed
-		if dur == 0 {
-			dur = moving
-		}
-		s1 := s0.Add(time.Duration(dur) * time.Second)
-
-		// Intervals overlap (half-open) -> same activity.
-		if t0.Before(s1) && s0.Before(t1) {
-			return id, true
-		}
-		// Same day + near-identical distance and duration -> same activity
-		// recorded by a different source with a shifted timestamp.
-		if distanceM > 0 && dist > 0 &&
-			sameMagnitude(distanceM, dist, 0.02) &&
-			sameMagnitude(float64(durationSec), float64(dur), 0.20) {
-			return id, true
-		}
-	}
-	return 0, false
+func countRuns(db *sql.DB) int {
+	var n int
+	_ = db.QueryRow("SELECT COUNT(*) FROM runs").Scan(&n)
+	return n
 }
 
-// mergeHealthIntoRun enriches an existing run with scalar fields from an
-// overlapping Google Health activity, filling ONLY values the existing run is
-// missing (so the richer source — Strava splits/GPS — is never overwritten).
-func mergeHealthIntoRun(db *sql.DB, id int64, a *stravaActivity) error {
-	_, err := db.Exec(`UPDATE runs SET
-		calories             = CASE WHEN calories = 0 THEN ? ELSE calories END,
-		average_cadence      = CASE WHEN average_cadence = 0 THEN ? ELSE average_cadence END,
-		total_elevation_gain = CASE WHEN total_elevation_gain = 0 THEN ? ELSE total_elevation_gain END,
-		average_heartrate    = CASE WHEN has_heartrate = 0 THEN ? ELSE average_heartrate END,
-		has_heartrate        = CASE WHEN has_heartrate = 0 AND ? = 1 THEN 1 ELSE has_heartrate END,
-		updated_at           = datetime('now')
-		WHERE id = ?`,
-		a.Calories, a.AverageCadence, a.TotalElevationGain,
-		a.AverageHeartrate, boolToInt(a.HasHeartrate), id)
-	return err
+// dedupRow is a minimal projection of a run used for duplicate detection.
+type dedupRow struct {
+	id    int64
+	start time.Time
+	dur   int
+	dist  float64
+	cal   int
+	cad   float64
+	hr    float64
+	hasHR bool
+	elev  float64
+	rich  bool // has real Strava data: GPS polyline / splits / best efforts
+	valid bool // start_date parsed
+}
+
+// loadDedupRows projects every run for duplicate analysis.
+func loadDedupRows(db *sql.DB) ([]dedupRow, error) {
+	rows, err := db.Query(`SELECT id, start_date, elapsed_time_seconds, moving_time_seconds,
+		distance_meters, calories, average_cadence, average_heartrate, has_heartrate,
+		total_elevation_gain, COALESCE(summary_polyline,''), COALESCE(splits_metric,''),
+		COALESCE(best_efforts,'')
+		FROM runs ORDER BY start_date, id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []dedupRow
+	for rows.Next() {
+		var r dedupRow
+		var sd, poly, splits, best string
+		var elapsed, moving, hasHR int
+		if err := rows.Scan(&r.id, &sd, &elapsed, &moving, &r.dist, &r.cal, &r.cad,
+			&r.hr, &hasHR, &r.elev, &poly, &splits, &best); err != nil {
+			continue
+		}
+		r.dur = elapsed
+		if r.dur == 0 {
+			r.dur = moving
+		}
+		r.hasHR = hasHR != 0
+		r.rich = poly != "" || splits != "" || best != ""
+		if t, e := time.Parse(time.RFC3339, sd); e == nil {
+			r.start = t
+			r.valid = true
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// runsDuplicate reports whether two runs are the same activity: their intervals
+// overlap, or — for cross-source records (at least one lacking rich Strava data)
+// — they share a calendar day with near-identical distance and duration. The
+// fuzzy rule is gated on cross-source so two distinct same-distance Strava runs
+// on one day are never collapsed.
+func runsDuplicate(a, b *dedupRow) bool {
+	if !a.valid || !b.valid {
+		return false
+	}
+	if a.start.Year() != b.start.Year() || a.start.YearDay() != b.start.YearDay() {
+		return false
+	}
+	aEnd := a.start.Add(time.Duration(a.dur) * time.Second)
+	bEnd := b.start.Add(time.Duration(b.dur) * time.Second)
+	if a.start.Before(bEnd) && b.start.Before(aEnd) {
+		return true // intervals overlap
+	}
+	if (!a.rich || !b.rich) && a.dist > 0 && b.dist > 0 &&
+		sameMagnitude(a.dist, b.dist, 0.02) &&
+		sameMagnitude(float64(a.dur), float64(b.dur), 0.20) {
+		return true
+	}
+	return false
+}
+
+// betterSurvivor reports whether a should survive a merge over b: prefer the
+// richer record (real Strava data is authoritative — its start/stop times take
+// precedence over Google Health), else the lower id.
+func betterSurvivor(a, b *dedupRow) bool {
+	if a.rich != b.rich {
+		return a.rich
+	}
+	return a.id < b.id
+}
+
+// dedupeRuns collapses runs that are the same activity into a single row. The
+// surviving row (richer / Strava-authoritative, keeping its own start/stop times)
+// is backfilled with any scalar fields it's missing (calories, cadence, HR,
+// elevation) from the rows removed. Idempotent; safe to run after every ingest.
+// Returns the number of rows removed.
+func dedupeRuns(db *sql.DB) (int, error) {
+	all, err := loadDedupRows(db)
+	if err != nil {
+		return 0, err
+	}
+	n := len(all)
+	parent := make([]int, n)
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(x int) int {
+		for parent[x] != x {
+			parent[x] = parent[parent[x]]
+			x = parent[x]
+		}
+		return x
+	}
+	for i := 0; i < n; i++ {
+		for j := 0; j < i; j++ {
+			if runsDuplicate(&all[i], &all[j]) {
+				parent[find(i)] = find(j)
+			}
+		}
+	}
+	groups := map[int][]int{}
+	for i := 0; i < n; i++ {
+		root := find(i)
+		groups[root] = append(groups[root], i)
+	}
+
+	var removed []int64
+	for _, idxs := range groups {
+		if len(idxs) < 2 {
+			continue
+		}
+		s := idxs[0]
+		for _, k := range idxs[1:] {
+			if betterSurvivor(&all[k], &all[s]) {
+				s = k
+			}
+		}
+		surv := &all[s]
+		changed := false
+		for _, k := range idxs {
+			if k == s {
+				continue
+			}
+			lo := &all[k]
+			if surv.cal == 0 && lo.cal != 0 {
+				surv.cal = lo.cal
+				changed = true
+			}
+			if surv.cad == 0 && lo.cad != 0 {
+				surv.cad = lo.cad
+				changed = true
+			}
+			if surv.elev == 0 && lo.elev != 0 {
+				surv.elev = lo.elev
+				changed = true
+			}
+			if !surv.hasHR && lo.hasHR {
+				surv.hasHR = true
+				surv.hr = lo.hr
+				changed = true
+			}
+			removed = append(removed, lo.id)
+		}
+		if changed {
+			if _, err := db.Exec(`UPDATE runs SET calories=?, average_cadence=?,
+				average_heartrate=?, has_heartrate=?, total_elevation_gain=?, updated_at=datetime('now')
+				WHERE id=?`, surv.cal, surv.cad, surv.hr, boolToInt(surv.hasHR), surv.elev, surv.id); err != nil {
+				return len(removed), err
+			}
+		}
+	}
+	for _, id := range removed {
+		if _, err := db.Exec(`DELETE FROM runs WHERE id = ?`, id); err != nil {
+			return len(removed), err
+		}
+	}
+	return len(removed), nil
 }
 
 // upsertHealthDataPoint maps one Health exercise data point onto the runs table,
-// reusing the Strava upsert path so the column mapping stays in one place.
-// Returns merged=true when it enriched an existing overlapping run instead of
-// inserting a new one.
-func upsertHealthDataPoint(db *sql.DB, dp *healthDataPoint) (merged bool, err error) {
+// reusing the Strava upsert path. Cross-source duplicates are collapsed afterward
+// by dedupeRuns (callers run it once per batch).
+func upsertHealthDataPoint(db *sql.DB, dp *healthDataPoint) error {
 	ex := dp.Exercise
 	m := ex.MetricsSummary
 
@@ -409,16 +533,11 @@ func upsertHealthDataPoint(db *sql.DB, dp *healthDataPoint) (merged bool, err er
 		HasHeartrate:       hr > 0,
 		AverageHeartrate:   hr,
 		TotalElevationGain: m.ElevationGainMillimeters / 1000.0,
-		Calories:           int(m.CaloriesKcal + 0.5),
+		Calories:           m.CaloriesKcal,
 		DeviceName:         healthDeviceName(dp),
 	}
 
-	// Merge into an existing run that overlaps in time (same activity from
-	// another source, e.g. the Strava export) rather than creating a duplicate.
-	if existingID, ok := findDuplicateRunID(db, ex.Interval.StartTime, elapsed, distM, a.ID); ok {
-		return true, mergeHealthIntoRun(db, existingID, &a)
-	}
-	return false, upsertActivity(db, &a)
+	return upsertActivity(db, &a)
 }
 
 // POST /api/ingest/health
@@ -442,32 +561,24 @@ func (a *App) handleIngestHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imported, merged, errCount, skipped := 0, 0, 0, 0
-	names := []string{}
+	before := countRuns(a.db)
+	skipped := 0
 	for i := range req.DataPoints {
 		dp := &req.DataPoints[i]
-		if dp.Exercise.Interval.StartTime == "" {
+		if dp.Exercise.Interval.StartTime == "" || upsertHealthDataPoint(a.db, dp) != nil {
 			skipped++
 			continue
 		}
-		wasMerged, err := upsertHealthDataPoint(a.db, dp)
-		if err != nil {
-			errCount++
-			continue
-		}
-		if wasMerged {
-			merged++
-		} else {
-			imported++
-			names = append(names, firstNonEmpty(dp.Exercise.DisplayName, "Run"))
-		}
+	}
+	merged, _ := dedupeRuns(a.db)
+	imported := countRuns(a.db) - before
+	if imported < 0 {
+		imported = 0
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"imported": imported,
 		"merged":   merged,
-		"errors":   errCount,
 		"skipped":  skipped,
-		"runs":     names,
 	})
 }

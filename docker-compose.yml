@@ -5,10 +5,23 @@ services:
     ports:
       - "8651:8651"
     restart: unless-stopped
+    # Run as root so the container can read the root-owned Strava credentials
+    # file mounted below (mode 0600). The /data volume is still writable.
+    user: root
     volumes:
       - runs-data:/data
+      # Strava OAuth credentials (read-write so refreshed tokens persist back to
+      # the host). Optional — Strava HR-stream fetching is disabled if absent.
+      - /root/.strava_credentials.json:/root/.strava_credentials.json
+    # Google Health credentials are read from the host .env at runtime (not baked
+    # into the image; .env is git/docker-ignored). Optional — sync is disabled if
+    # absent. The `env_file` is marked required:false so builds work without it.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - PORT=8651
       - DB_PATH=/data/runs.db
+      - STRAVA_CREDENTIALS_FILE=/root/.strava_credentials.json
 volumes:
   runs-data:

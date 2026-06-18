@@ -81,13 +81,9 @@ func computeDerived(r *Run, detail bool) {
 	if detail {
 		r.ElevationProfile = buildElevationProfile(r)
 		if r.HasHeartrate && r.AverageHeartrate > 0 {
-			// Prefer the real per-point Strava HR stream when stored; fall back
-			// to the synthetic wobble only when no stream is available.
-			if real := buildHRSeriesFromStream(r.HRStream, r.DistanceMeters/1000); len(real) > 0 {
-				r.HRSeries = real
-			} else {
-				r.HRSeries = buildHRSeries(r)
-			}
+			// Only show the real per-point Strava HR stream. When no stream is
+			// stored, HRSeries stays nil and the frontend skips the HR chart.
+			r.HRSeries = buildHRSeriesFromStream(r.HRStream, r.DistanceMeters/1000)
 		}
 	}
 }
@@ -287,10 +283,6 @@ func buildSyntheticElevationProfile(r *Run) []ElevPt {
 	return out
 }
 
-func buildHRSeries(r *Run) []SeriesPt {
-	return wobbleSeries(r, r.AverageHeartrate, 0.1, 23)
-}
-
 // storedHRStream is the compact JSON we persist in runs.hr_stream: two parallel
 // arrays where heartrate[i] is the BPM recorded at the cumulative distance (m)
 // in distance[i]. Written by the Strava stream fetch in strava.go.
@@ -302,8 +294,8 @@ type storedHRStream struct {
 // buildHRSeriesFromStream turns the raw per-point Strava HR stream into the
 // ~40-point per-distance series the detail view expects. Each output point is
 // the mean HR over an index bucket, placed at that bucket's cumulative
-// distance. Returns nil when no usable stream is present so the caller can fall
-// back to the synthetic wobble.
+// distance. Returns nil when no usable stream is present so the caller can skip
+// the HR chart entirely.
 func buildHRSeriesFromStream(raw string, totalKM float64) []SeriesPt {
 	if raw == "" {
 		return nil
@@ -370,27 +362,6 @@ func distAt(dist []float64, hasDist bool, i, n int, totalKM float64) float64 {
 		return 0
 	}
 	return float64(i) / float64(n-1) * totalKM
-}
-
-// wobbleSeries builds a per-distance series oscillating around `avg`.
-func wobbleSeries(r *Run, avg, amp float64, salt int64) []SeriesPt {
-	totalKM := r.DistanceMeters / 1000
-	if totalKM <= 0 {
-		return nil
-	}
-	rng := newSeeded(r.StravaID + salt)
-	phase := rng.next() * math.Pi
-	const samples = 40
-	out := make([]SeriesPt, 0, samples+1)
-	for i := 0; i <= samples; i++ {
-		frac := float64(i) / samples
-		v := avg * (1 + amp*math.Sin(frac*math.Pi*3+phase) + amp*0.4*rng.next())
-		out = append(out, SeriesPt{
-			DistanceKM: round2(frac * totalKM),
-			Value:      round1(v),
-		})
-	}
-	return out
 }
 
 func round1(v float64) float64 { return math.Round(v*10) / 10 }

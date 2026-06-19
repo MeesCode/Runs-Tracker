@@ -66,6 +66,7 @@ function renderPanel(run) {
   const splits = run.splits || []
   const be = run.best_efforts || {}
   const hasHR = run.has_heartrate && (run.hr_series || []).length > 0
+  const hasElev = (run.elevation_profile || []).length > 0
   const hasCadence = (run.cadence_series || []).length > 0
 
   const splitRows = splits.map((s) => `
@@ -112,10 +113,10 @@ function renderPanel(run) {
       <div class="chart-box"><canvas id="ch-pace"></canvas></div>
     </div>
 
-    <div class="card section">
-      <h3>Elevation profile${run.splits_estimated ? ' <span class="est">estimated</span>' : ''}</h3>
+    ${hasElev ? `<div class="card section">
+      <h3>Elevation profile</h3>
       <div class="chart-box"><canvas id="ch-elev"></canvas></div>
-    </div>
+    </div>` : ''}
 
     ${hasCadence ? `<div class="card section">
       <h3>Cadence</h3>

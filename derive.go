@@ -220,14 +220,14 @@ func bestWindow(splits []Split, km int) string {
 
 // buildElevationProfile samples the route. When real split data exists (each
 // split has elevation_difference), it builds an accurate cumulative elevation
-// profile from the per-split elevation changes. Falls back to a smooth
-// deterministic sine-wave profile bounded by elev_low/elev_high.
+// profile from the per-split elevation changes. When no real data is available,
+// ElevationProfile stays nil so the frontend skips the elevation chart.
 func buildElevationProfile(r *Run) []ElevPt {
 	// Use real per-split elevation data when available.
 	if !r.SplitsEstimated && len(r.Splits) > 0 {
 		return buildRealElevationProfile(r)
 	}
-	return buildSyntheticElevationProfile(r)
+	return nil
 }
 
 // buildRealElevationProfile builds an elevation profile from the cumulative
@@ -243,41 +243,6 @@ func buildRealElevationProfile(r *Run) []ElevPt {
 		out = append(out, ElevPt{
 			DistanceKM: round2(cumDist),
 			Elevation:  round1(cumElev),
-		})
-	}
-	return out
-}
-
-// buildSyntheticElevationProfile produces a smooth deterministic profile
-// bounded by elev_low/elev_high consistent with total_elevation_gain.
-func buildSyntheticElevationProfile(r *Run) []ElevPt {
-	pts := r.Polyline
-	if len(pts) < 2 {
-		return nil
-	}
-	cum := cumulativeDistances(pts)
-	total := cum[len(cum)-1]
-	if total <= 0 {
-		return nil
-	}
-	low, high := r.ElevLow, r.ElevHigh
-	if high <= low {
-		high = low + math.Max(1, r.TotalElevationGain)
-	}
-	mid := (low + high) / 2
-	amp := (high - low) / 2
-	rng := newSeeded(r.StravaID + 7)
-	phase := rng.next() * math.Pi
-
-	const samples = 60
-	out := make([]ElevPt, 0, samples)
-	for i := 0; i <= samples; i++ {
-		frac := float64(i) / samples
-		// two sine components for a natural-looking rolling profile
-		v := mid + amp*0.7*math.Sin(frac*math.Pi*2+phase) + amp*0.3*math.Sin(frac*math.Pi*5+phase)
-		out = append(out, ElevPt{
-			DistanceKM: round2(frac * total / 1000),
-			Elevation:  round1(v),
 		})
 	}
 	return out
